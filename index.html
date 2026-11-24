@@ -149,6 +149,14 @@
               return resource && resource.resourceType === "Observation";
             })
           : [];
+        observations = observations.filter(function (observation) {
+          return hasCode(observation.code, "8302-2")
+            || hasCode(observation.code, "85354-9")
+            || hasCode(observation.code, "8480-6")
+            || hasCode(observation.code, "8462-4")
+            || hasCode(observation.code, "2085-9")
+            || hasCode(observation.code, "13457-7");
+        });
         if (!observations.length) {
           document.getElementById("observations-loading").hidden = true;
           document.getElementById("observations-empty").hidden = false;
@@ -185,10 +193,7 @@
             + " / " + (quantityText(diastolic) === "Not recorded" ? "Not recorded" : quantityText(diastolic))
           : "Not recorded";
       var bpDateSource = usePanel ? bpPanel : newestObservation([systolic, diastolic]);
-      if (usePanel && panelSystolic && panelDiastolic) {
-        var panelUnit = componentUnit(bpPanel, "8480-6") || componentUnit(bpPanel, "8462-4");
-        if (panelUnit) { bpText += " " + panelUnit; }
-      } else if (!usePanel && (systolic || diastolic)) {
+      if (!usePanel && (systolic || diastolic)) {
         var separateUnit = (systolic && systolic.valueQuantity && systolic.valueQuantity.unit)
           || (diastolic && diastolic.valueQuantity && diastolic.valueQuantity.unit);
         if (separateUnit) { bpText += " " + separateUnit; }
