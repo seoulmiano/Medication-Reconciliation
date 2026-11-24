@@ -189,15 +189,14 @@
       var bpText = usePanel
         ? (panelSystolic || "Not recorded") + " / " + (panelDiastolic || "Not recorded")
         : (systolic || diastolic)
-          ? (quantityText(systolic) === "Not recorded" ? "Not recorded" : quantityText(systolic))
-            + " / " + (quantityText(diastolic) === "Not recorded" ? "Not recorded" : quantityText(diastolic))
+          ? (quantityNumber(systolic) || "Not recorded") + " / " + (quantityNumber(diastolic) || "Not recorded")
           : "Not recorded";
       var bpDateSource = usePanel ? bpPanel : newestObservation([systolic, diastolic]);
-      if (!usePanel && (systolic || diastolic)) {
-        var separateUnit = (systolic && systolic.valueQuantity && systolic.valueQuantity.unit)
+      var bpUnit = usePanel
+        ? componentUnit(bpPanel, "8480-6") || componentUnit(bpPanel, "8462-4")
+        : (systolic && systolic.valueQuantity && systolic.valueQuantity.unit)
           || (diastolic && diastolic.valueQuantity && diastolic.valueQuantity.unit);
-        if (separateUnit) { bpText += " " + separateUnit; }
-      }
+      if (bpUnit && bpText !== "Not recorded") { bpText += " " + bpUnit; }
       setResult("bp", bpText, resultDate(bpDateSource));
       document.getElementById("observations-loading").hidden = true;
       document.getElementById("results-list").hidden = false;
@@ -244,7 +243,6 @@
       var component = components.filter(function (item) { return hasCode(item.code, code); })[0];
       return component && component.valueQuantity && component.valueQuantity.value !== undefined
         ? String(component.valueQuantity.value)
-          + (component.valueQuantity.unit ? " " + component.valueQuantity.unit : "")
         : "";
     }
 
@@ -254,6 +252,14 @@
       var components = panel && Array.isArray(panel.component) ? panel.component : [];
       var component = components.filter(function (item) { return hasCode(item.code, code); })[0];
       return component && component.valueQuantity ? (component.valueQuantity.unit || "") : "";
+    }
+
+    // This function reads only valueQuantity.value from a standalone blood-pressure Observation.
+    // The student should see the systolic and diastolic numbers with one shared unit.
+    function quantityNumber(observation) {
+      var quantity = observation && observation.valueQuantity;
+      return quantity && quantity.value !== undefined && quantity.value !== null
+        ? String(quantity.value) : "";
     }
 
     // This function reads valueQuantity.value and unit from a standalone Observation.
