@@ -42,6 +42,21 @@ The app checks the connected server's CapabilityStatement for `create` support a
 
 **Deployment and privacy limits:** this is still a static browser app with no app-owned backend, inbox, or file store. Patient entries and photos are sent to the connected FHIR server. A successful Communication write means it was saved to that server; it does not guarantee clinician notification or delivery to a monitored inbox. Configure the health system's FHIR workflow, recipient routing, authentication, consent, retention, and security policies before using this with real patient data. Do not use it for emergencies.
 
+## Medication reconciliation board
+
+The medication review renders a responsive five-lane CSS Grid board:
+- **Active**
+- **On hold**
+- **Stopped**
+- **Completed**
+- **Other** (draft, unknown, or other statuses)
+
+Medication cards show the recorded status and dosage instructions. For refill counts, the app reads the patient's MedicationDispense history and links completed dispenses to MedicationRequest resources through `authorizingPrescription`. It calculates remaining refills from `dispenseRequest.numberOfRepeatsAllowed` and linked dispense history. If the server does not support MedicationDispense search, the scope is not granted, the dispense history is incomplete, or the prescription does not include an authorized repeat count, the app shows an unavailable/not-recorded state rather than guessing.
+
+Active medication cards include a **Request refill** action. This submits a patient-authored FHIR Communication referencing the medication request; it does not create a MedicationRequest or issue a prescription. Whether the request reaches a clinician or monitored inbox depends on the health system's workflow.
+
+The app additionally requests `patient/MedicationDispense.read` for refill calculations. Patients may need to sign out and sign in again to grant the new scope.
+
 ## Patient sign-in
 
-`launch.html` starts a standalone launch at the [SMART Health IT R4 sandbox](https://launch.smarthealthit.org/). The scope is `launch/patient openid fhirUser patient/Patient.read`, so the sandbox asks which patient is signing in and the app can read that Patient resource. The sandbox sends the browser back to `index.html`, and `FHIR.oauth2.ready()` exchanges the authorization code for an access token. [HL7 SMART App Launch](https://hl7.org/fhir/smart-app-launch/app-launch.html)
+`launch.html` starts a standalone launch at the [SMART Health IT R4 sandbox](https://launch.smarthealthit.org/). The launch requests `launch/patient openid fhirUser patient/Patient.read patient/Observation.read patient/MedicationRequest.read patient/Medication.read patient/MedicationDispense.read patient/MedicationStatement.write patient/Communication.write patient/DocumentReference.write`. The sandbox asks which patient is signing in; the app reads the Patient, selected Observations, medication requests, and dispense history, and can submit patient-reported medication statements and communications when the server allows those interactions. The sandbox sends the browser back to `index.html`, and `FHIR.oauth2.ready()` exchanges the authorization code for an access token. [HL7 SMART App Launch](https://hl7.org/fhir/smart-app-launch/app-launch.html)
