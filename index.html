@@ -101,7 +101,17 @@
       <section aria-labelledby="medications-heading">
         <h2 id="medications-heading">Medication review</h2>
         <p id="medications-loading" role="status" aria-live="polite">Checking FHIR support and loading your medications…</p>
+        <div id="medication-filters" hidden>
+          <label for="medication-status-filter">Filter medications by status</label>
+          <select id="medication-status-filter">
+            <option value="all">All medications</option>
+            <option value="active">Active</option>
+            <option value="completed">Completed</option>
+            <option value="stopped">Stopped</option>
+          </select>
+        </div>
         <p id="medications-empty" class="muted" hidden>No medication requests were found for this patient.</p>
+        <p id="medications-filter-empty" class="muted" hidden>No medications match this status filter.</p>
         <p id="medications-unavailable" class="error" role="alert" hidden></p>
         <ul id="medication-list" class="medication-list" hidden></ul>
         <p class="muted medication-note">Read-only view of medication requests in your patient record.</p>
@@ -142,6 +152,12 @@
 
     // Medication review is intentionally read-only. Check the server's
     // CapabilityStatement and the granted SMART read scopes before searching.
+    var medicationRequests = [];
+    var resolvedMedications = {};
+    document.getElementById("medication-status-filter").addEventListener("change", function () {
+      renderFilteredMedicationRequests();
+    });
+
     function loadMedications(client, patient) {
       var patientId = (client.patient && client.patient.id) || patient.id;
       var loading = document.getElementById("medications-loading");
@@ -211,9 +227,12 @@
           }
 
           return referenceReads.then(function (resolved) {
-            renderMedicationRequests(requests, resolved);
+            medicationRequests = requests;
+            resolvedMedications = resolved;
             loading.hidden = true;
+            document.getElementById("medication-filters").hidden = false;
             document.getElementById("medication-list").hidden = false;
+            renderFilteredMedicationRequests();
           });
         });
       }).catch(function (error) {
@@ -242,10 +261,16 @@
       });
     }
 
-    function renderMedicationRequests(requests, resolved) {
+    function renderFilteredMedicationRequests() {
+      var selectedStatus = document.getElementById("medication-status-filter").value;
+      var filtered = medicationRequests.filter(function (request) {
+        return selectedStatus === "all" || request.status === selectedStatus;
+      });
       var list = document.getElementById("medication-list");
-      requests.forEach(function (request) {
-        var name = medicationName(request, resolved);
+      list.textContent = "";
+      document.getElementById("medications-filter-empty").hidden = filtered.length > 0;
+      filtered.forEach(function (request) {
+        var name = medicationName(request, resolvedMedications);
         var status = request.status || "Not recorded";
         var dosage = dosageInstructions(request);
         var item = document.createElement("li");
