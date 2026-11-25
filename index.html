@@ -489,7 +489,7 @@
       var tokenResponse = state.tokenResponse || {};
       var scope = tokenResponse.scope || state.scope || "";
       if (!scope) { return true; }
-      var scopes = scope.split(/\\s+/);
+      var scopes = scope.split(/\s+/);
       return scopes.some(function (item) {
         return item === "patient/" + resourceType + ".write"
           || item === "user/" + resourceType + ".write"
