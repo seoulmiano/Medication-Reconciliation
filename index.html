@@ -45,6 +45,15 @@
     .result-date { display: block; margin-top: 0.2rem; color: #ffffff; font-size: 0.9rem; font-weight: 400; }
     .muted { color: #ffffff; }
     .error { padding: 0.8rem 1rem; border-left: 4px solid #9b1c1c; background: #fff; color: #7a1717; }
+    .medication-list { list-style: none; margin: 0; padding: 0; }
+    .medication-item { padding: 1rem 0; border-top: 1px solid #e4e9ef; }
+    .medication-item:first-child { border-top: 0; padding-top: 0; }
+    .medication-name { margin: 0 0 0.35rem; font-size: 1.05rem; font-weight: 700; overflow-wrap: anywhere; }
+    .medication-meta { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; margin: 0 0 0.45rem; }
+    .medication-meta span { font-size: 0.92rem; }
+    .medication-dosage { margin: 0; overflow-wrap: anywhere; }
+    .medication-note { margin-bottom: 0; font-size: 0.9rem; }
+
     a { color: #ffffff; text-underline-offset: 0.15em; }
     a:focus-visible { outline: 3px solid #ffffff; outline-offset: 3px; }
     [hidden] { display: none !important; }
@@ -89,6 +98,14 @@
           <div><dt>LDL</dt><dd><span class="result-value" id="ldl-value">Not recorded</span><span class="result-date" id="ldl-date"></span></dd></div>
         </dl>
       </section>
+      <section aria-labelledby="medications-heading">
+        <h2 id="medications-heading">Medication review</h2>
+        <p id="medications-loading" role="status" aria-live="polite">Checking FHIR support and loading your medications…</p>
+        <p id="medications-empty" class="muted" hidden>No medication requests were found for this patient.</p>
+        <p id="medications-unavailable" class="error" role="alert" hidden></p>
+        <ul id="medication-list" class="medication-list" hidden></ul>
+        <p class="muted medication-note">Read-only view of medication requests in your patient record.</p>
+      </section>
       <p><a href="./" id="sign-out">Sign out</a></p>
     </div>
 
@@ -105,7 +122,10 @@
       .then(function (client) {
         return client.patient.read().then(function (patient) {
           showPatient(patient);
-          return loadObservations(client, patient);
+          return Promise.all([
+            loadObservations(client, patient),
+            loadMedications(client, patient)
+          ]);
         });
       })
       .catch(function (error) {
@@ -119,6 +139,213 @@
       sessionStorage.clear();
       location.href = "./";
     });
+
+    // Medication review is intentionally read-only. Check the server's
+    // CapabilityStatement and the granted SMART read scopes before searching.
+    function loadMedications(client, patient) {
+      var patientId = (client.patient && client.patient.id) || patient.id;
+      var loading = document.getElementById("medications-loading");
+      if (!patientId) {
+        showMedicationUnavailable("We could not identify the signed-in patient, so medications could not be requested.");
+        return Promise.resolve();
+      }
+
+      return client.request("metadata").then(function (capability) {
+        var resources = [];
+        (capability.rest || []).forEach(function (rest) {
+          (rest.resource || []).forEach(function (resource) { resources.push(resource); });
+        });
+        var medicationRequestCapability = resources.filter(function (resource) {
+          return resource.type === "MedicationRequest";
+        })[0];
+        if (!medicationRequestCapability || !supportsInteraction(medicationRequestCapability, "search-type")) {
+          throw new Error("This FHIR server does not advertise MedicationRequest search support.");
+        }
+        if (!hasGrantedReadScope(client, "MedicationRequest")) {
+          throw new Error("The app was not granted patient/MedicationRequest.read permission. Please sign in again and approve the requested access.");
+        }
+
+        var query = "MedicationRequest?patient=" + encodeURIComponent(patientId);
+        return client.request(query).then(function (bundle) {
+          var requests = bundle && Array.isArray(bundle.entry)
+            ? bundle.entry.map(function (entry) { return entry.resource; }).filter(function (resource) {
+                return resource && resource.resourceType === "MedicationRequest";
+              })
+            : [];
+          if (!requests.length) {
+            loading.hidden = true;
+            document.getElementById("medications-empty").hidden = false;
+            return;
+          }
+
+          var medicationCapability = resources.filter(function (resource) {
+            return resource.type === "Medication";
+          })[0];
+          var references = [];
+          requests.forEach(function (request) {
+            var ref = request.medicationReference && request.medicationReference.reference;
+            if (ref && ref.charAt(0) !== "#" && references.indexOf(ref) === -1) {
+              references.push(ref);
+            }
+          });
+
+          var referenceReads = Promise.resolve({});
+          if (references.length) {
+            if (!medicationCapability || !supportsInteraction(medicationCapability, "read")) {
+              throw new Error("A medication is referenced by a request, but this FHIR server does not advertise Medication read support.");
+            }
+            if (!hasGrantedReadScope(client, "Medication")) {
+              throw new Error("The app was not granted patient/Medication.read permission needed to resolve referenced medication names. Please sign in again and approve the requested access.");
+            }
+            referenceReads = Promise.all(references.map(function (reference) {
+              return client.request(reference).then(function (medication) {
+                return { reference: reference, medication: medication };
+              }).catch(function () {
+                return { reference: reference, medication: null };
+              });
+            })).then(function (items) {
+              var resolved = {};
+              items.forEach(function (item) { resolved[item.reference] = item.medication; });
+              return resolved;
+            });
+          }
+
+          return referenceReads.then(function (resolved) {
+            renderMedicationRequests(requests, resolved);
+            loading.hidden = true;
+            document.getElementById("medication-list").hidden = false;
+          });
+        });
+      }).catch(function (error) {
+        showMedicationUnavailable("We could not load your medication review. " + readableError(error));
+      });
+    }
+
+    function supportsInteraction(resource, code) {
+      var interactions = Array.isArray(resource.interaction) ? resource.interaction : [];
+      return interactions.some(function (interaction) { return interaction && interaction.code === code; });
+    }
+
+    function hasGrantedReadScope(client, resourceType) {
+      var state = client.state || {};
+      var tokenResponse = state.tokenResponse || {};
+      var scope = tokenResponse.scope || state.scope || "";
+      // Some SMART servers omit the returned scope string. In that case the
+      // resource request itself remains the definitive authorization check.
+      if (!scope) { return true; }
+      var scopes = scope.split(/\\s+/);
+      return scopes.some(function (item) {
+        return item === "patient/" + resourceType + ".read"
+          || item === "user/" + resourceType + ".read"
+          || item === "patient/*.read"
+          || item === "user/*.read";
+      });
+    }
+
+    function renderMedicationRequests(requests, resolved) {
+      var list = document.getElementById("medication-list");
+      requests.forEach(function (request) {
+        var name = medicationName(request, resolved);
+        var status = request.status || "Not recorded";
+        var dosage = dosageInstructions(request);
+        var item = document.createElement("li");
+        item.className = "medication-item";
+
+        var heading = document.createElement("h3");
+        heading.className = "medication-name";
+        heading.textContent = name;
+        item.appendChild(heading);
+
+        var meta = document.createElement("p");
+        meta.className = "medication-meta";
+        var statusText = document.createElement("span");
+        statusText.textContent = "Status: " + status;
+        meta.appendChild(statusText);
+        if (request.intent) {
+          var intentText = document.createElement("span");
+          intentText.textContent = "Intent: " + request.intent;
+          meta.appendChild(intentText);
+        }
+        item.appendChild(meta);
+
+        var dosageText = document.createElement("p");
+        dosageText.className = "medication-dosage";
+        dosageText.textContent = "Dosage instructions: " + dosage;
+        item.appendChild(dosageText);
+        list.appendChild(item);
+      });
+    }
+
+    function medicationName(request, resolved) {
+      var concept = request.medicationCodeableConcept;
+      if (concept) {
+        if (concept.text) { return concept.text; }
+        var codings = Array.isArray(concept.coding) ? concept.coding : [];
+        for (var i = 0; i < codings.length; i += 1) {
+          if (codings[i] && codings[i].display) { return codings[i].display; }
+        }
+      }
+
+      var reference = request.medicationReference;
+      if (reference) {
+        if (reference.display) { return reference.display; }
+        var ref = reference.reference || "";
+        if (ref.charAt(0) === "#") {
+          var contained = Array.isArray(request.contained) ? request.contained : [];
+          var containedMedication = contained.filter(function (resource) {
+            return resource && resource.id === ref.slice(1) && resource.resourceType === "Medication";
+          })[0];
+          if (containedMedication) { return medicationResourceName(containedMedication); }
+        }
+        if (resolved[ref]) { return medicationResourceName(resolved[ref]); }
+      }
+      return "Medication name not recorded";
+    }
+
+    function medicationResourceName(medication) {
+      var code = medication && medication.code;
+      if (!code) { return "Medication name not recorded"; }
+      if (code.text) { return code.text; }
+      var codings = Array.isArray(code.coding) ? code.coding : [];
+      for (var i = 0; i < codings.length; i += 1) {
+        if (codings[i] && codings[i].display) { return codings[i].display; }
+      }
+      return "Medication name not recorded";
+    }
+
+    function dosageInstructions(request) {
+      var instructions = Array.isArray(request.dosageInstruction) ? request.dosageInstruction : [];
+      if (!instructions.length) { return "Not recorded"; }
+      var parts = [];
+      instructions.forEach(function (instruction) {
+        if (instruction.text) {
+          parts.push(instruction.text);
+          return;
+        }
+        var detail = [];
+        if (instruction.doseAndRate && instruction.doseAndRate.length) {
+          instruction.doseAndRate.forEach(function (dose) {
+            var quantity = dose && dose.doseQuantity;
+            if (quantity && quantity.value !== undefined && quantity.value !== null) {
+              detail.push(String(quantity.value) + (quantity.unit ? " " + quantity.unit : ""));
+            }
+          });
+        }
+        if (instruction.route && instruction.route.text) { detail.push("via " + instruction.route.text); }
+        if (instruction.timing && instruction.timing.code && instruction.timing.code.text) {
+          detail.push(instruction.timing.code.text);
+        }
+        if (detail.length) { parts.push(detail.join(", ")); }
+      });
+      return parts.length ? parts.join("; ") : "Not recorded";
+    }
+
+    function showMedicationUnavailable(message) {
+      document.getElementById("medications-loading").hidden = true;
+      var node = document.getElementById("medications-unavailable");
+      node.hidden = false;
+      node.textContent = message;
+    }
 
     // This function reads optional Patient.name, gender and birthDate fields.
     // The student should see a safe identity summary even when some fields are absent.
