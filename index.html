@@ -233,7 +233,7 @@
       // Some SMART servers omit the returned scope string. In that case the
       // resource request itself remains the definitive authorization check.
       if (!scope) { return true; }
-      var scopes = scope.split(/\\s+/);
+      var scopes = scope.split(/\s+/);
       return scopes.some(function (item) {
         return item === "patient/" + resourceType + ".read"
           || item === "user/" + resourceType + ".read"
