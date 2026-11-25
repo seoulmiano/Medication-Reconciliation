@@ -68,6 +68,74 @@
     a { color: #ffffff; text-underline-offset: 0.15em; }
     a:focus-visible { outline: 3px solid #ffffff; outline-offset: 3px; }
     [hidden] { display: none !important; }
+    .medication-board-wrap { overflow-x: auto; padding-bottom: 0.5rem; }
+    .medication-board {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(14rem, 1fr));
+      gap: 0.85rem;
+      min-width: 74rem;
+      align-items: start;
+    }
+    .medication-lane {
+      min-height: 12rem;
+      padding: 0.75rem;
+      border: 1px solid #d7e1ea;
+      border-radius: 0.65rem;
+      background: #f4f7fa;
+    }
+    .medication-lane h3 {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.5rem;
+      margin: 0 0 0.75rem;
+      color: #17324d;
+      font-size: 0.95rem;
+    }
+    .lane-count {
+      display: inline-grid;
+      place-items: center;
+      min-width: 1.6rem;
+      height: 1.6rem;
+      padding: 0 0.35rem;
+      border-radius: 99px;
+      background: #e1eaf2;
+      font-size: 0.8rem;
+    }
+    .medication-card {
+      margin: 0 0 0.7rem;
+      padding: 0.85rem;
+      border: 1px solid #dce4eb;
+      border-radius: 0.55rem;
+      background: #fff;
+      box-shadow: 0 1px 2px rgba(16, 42, 67, 0.06);
+      color: #203447;
+    }
+    .medication-card:last-child { margin-bottom: 0; }
+    .medication-card .medication-name { color: #12395a; font-size: 0.98rem; }
+    .medication-card .medication-meta { color: #526579; font-size: 0.82rem; }
+    .medication-card .medication-dosage { color: #34495e; font-size: 0.88rem; }
+    .medication-refills {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin: 0.7rem 0;
+      padding-top: 0.6rem;
+      border-top: 1px solid #e8edf2;
+      font-size: 0.85rem;
+    }
+    .refill-request-box {
+      display: grid;
+      gap: 0.45rem;
+      margin-top: 0.65rem;
+      padding: 0.65rem;
+      border-radius: 0.45rem;
+      background: #eef5fb;
+    }
+    .refill-request-box p { margin: 0; color: #29445d; font-size: 0.82rem; }
+    .refill-request-box button { width: 100%; padding: 0.55rem 0.7rem; background: #075b9a; color: #fff; font-size: 0.85rem; }
+    .refill-request-status { font-size: 0.8rem; overflow-wrap: anywhere; }
+    .board-help { margin: 0.75rem 0 0; color: #526579; font-size: 0.88rem; }
     @media (max-width: 26rem) {
       body { padding: 0.75rem; }
       section, .panel { padding: 1rem; }
@@ -124,8 +192,17 @@
         <p id="medications-empty" class="muted" hidden>No medication requests were found for this patient.</p>
         <p id="medications-filter-empty" class="muted" hidden>No medications match this status filter.</p>
         <p id="medications-unavailable" class="error" role="alert" hidden></p>
-        <ul id="medication-list" class="medication-list" hidden></ul>
-        <p class="muted medication-note">Read-only view of medication requests in your patient record.</p>
+        <div class="medication-board-wrap" id="medication-board-wrap" hidden>
+          <div id="medication-board" class="medication-board" aria-label="Five-column medication reconciliation board">
+            <section class="medication-lane" data-lane="active" aria-labelledby="lane-active"><h3 id="lane-active">Active <span class="lane-count" id="count-active">0</span></h3><div id="cards-active"></div></section>
+            <section class="medication-lane" data-lane="on-hold" aria-labelledby="lane-on-hold"><h3 id="lane-on-hold">On hold <span class="lane-count" id="count-on-hold">0</span></h3><div id="cards-on-hold"></div></section>
+            <section class="medication-lane" data-lane="stopped" aria-labelledby="lane-stopped"><h3 id="lane-stopped">Stopped <span class="lane-count" id="count-stopped">0</span></h3><div id="cards-stopped"></div></section>
+            <section class="medication-lane" data-lane="completed" aria-labelledby="lane-completed"><h3 id="lane-completed">Completed <span class="lane-count" id="count-completed">0</span></h3><div id="cards-completed"></div></section>
+            <section class="medication-lane" data-lane="other" aria-labelledby="lane-other"><h3 id="lane-other">Other <span class="lane-count" id="count-other">0</span></h3><div id="cards-other"></div></section>
+          </div>
+        </div>
+        <p class="board-help">Refills remaining are calculated from linked completed MedicationDispense records. If dispense history is unavailable or incomplete, the board will say so instead of estimating.</p>
+        <p class="muted medication-note">Medication requests are shown as recorded by your health system. A refill request is a message to the connected record, not a new prescription.</p>
       </section>
       <section aria-labelledby="patient-medication-heading">
         <h2 id="patient-medication-heading">Add a medication you take</h2>
@@ -244,6 +321,7 @@
     // CapabilityStatement and the granted SMART read scopes before searching.
     var medicationRequests = [];
     var resolvedMedications = {};
+    var medicationDispenses = null;
     document.getElementById("medication-status-filter").addEventListener("change", function () {
       renderFilteredMedicationRequests();
     });
@@ -316,12 +394,13 @@
             });
           }
 
-          return referenceReads.then(function (resolved) {
+          return Promise.all([referenceReads, loadMedicationDispenses(client, patientId)]).then(function (results) {
             medicationRequests = requests;
-            resolvedMedications = resolved;
+            resolvedMedications = results[0];
+            medicationDispenses = results[1];
             loading.hidden = true;
             document.getElementById("medication-filters").hidden = false;
-            document.getElementById("medication-list").hidden = false;
+            document.getElementById("medication-board-wrap").hidden = false;
             renderFilteredMedicationRequests();
           });
         });
@@ -356,39 +435,157 @@
       var filtered = medicationRequests.filter(function (request) {
         return selectedStatus === "all" || request.status === selectedStatus;
       });
-      var list = document.getElementById("medication-list");
-      list.textContent = "";
+      var lanes = ["active", "on-hold", "stopped", "completed", "other"];
+      lanes.forEach(function (lane) {
+        document.getElementById("cards-" + lane).textContent = "";
+        document.getElementById("count-" + lane).textContent = "0";
+      });
       document.getElementById("medications-filter-empty").hidden = filtered.length > 0;
-      filtered.forEach(function (request) {
-        var name = medicationName(request, resolvedMedications);
-        var status = request.status || "Not recorded";
-        var dosage = dosageInstructions(request);
-        var item = document.createElement("li");
-        item.className = "medication-item";
 
-        var heading = document.createElement("h3");
+      var counts = { active: 0, "on-hold": 0, stopped: 0, completed: 0, other: 0 };
+      filtered.forEach(function (request) {
+        var status = String(request.status || "unknown").toLowerCase();
+        var lane = ["active", "on-hold", "stopped", "completed"].indexOf(status) >= 0 ? status : "other";
+        counts[lane] += 1;
+
+        var name = medicationName(request, resolvedMedications);
+        var item = document.createElement("article");
+        item.className = "medication-card";
+
+        var heading = document.createElement("h4");
         heading.className = "medication-name";
         heading.textContent = name;
         item.appendChild(heading);
 
         var meta = document.createElement("p");
         meta.className = "medication-meta";
-        var statusText = document.createElement("span");
-        statusText.textContent = "Status: " + status;
-        meta.appendChild(statusText);
-        if (request.intent) {
-          var intentText = document.createElement("span");
-          intentText.textContent = "Intent: " + request.intent;
-          meta.appendChild(intentText);
-        }
+        meta.textContent = "Status: " + status + (request.intent ? " · Intent: " + request.intent : "");
         item.appendChild(meta);
 
         var dosageText = document.createElement("p");
         dosageText.className = "medication-dosage";
-        dosageText.textContent = "Dosage instructions: " + dosage;
+        dosageText.textContent = "Dosage: " + dosageInstructions(request);
         item.appendChild(dosageText);
-        list.appendChild(item);
+
+        var refillInfo = getRefillInfo(request);
+        var refillRow = document.createElement("div");
+        refillRow.className = "medication-refills";
+        var refillLabel = document.createElement("span");
+        refillLabel.textContent = "Refills remaining";
+        var refillValue = document.createElement("strong");
+        refillValue.textContent = refillInfo.label;
+        refillRow.appendChild(refillLabel);
+        refillRow.appendChild(refillValue);
+        item.appendChild(refillRow);
+
+        if (status === "active") {
+          var refillBox = document.createElement("div");
+          refillBox.className = "refill-request-box";
+          var refillPrompt = document.createElement("p");
+          refillPrompt.textContent = "Need more of this medication?";
+          var refillButton = document.createElement("button");
+          refillButton.type = "button";
+          refillButton.textContent = "Request refill";
+          refillButton.addEventListener("click", function () {
+            submitRefillRequest(request, name, refillInfo, refillButton, refillBox);
+          });
+          var refillStatus = document.createElement("span");
+          refillStatus.className = "refill-request-status";
+          refillStatus.setAttribute("role", "status");
+          refillStatus.setAttribute("aria-live", "polite");
+          refillBox.appendChild(refillPrompt);
+          refillBox.appendChild(refillButton);
+          refillBox.appendChild(refillStatus);
+          item.appendChild(refillBox);
+        }
+
+        document.getElementById("cards-" + lane).appendChild(item);
       });
+      lanes.forEach(function (lane) {
+        document.getElementById("count-" + lane).textContent = String(counts[lane]);
+      });
+    }
+
+    function loadMedicationDispenses(client, patientId) {
+      return client.request("metadata").then(function (capability) {
+        var resource = [];
+        (capability.rest || []).forEach(function (rest) {
+          (rest.resource || []).forEach(function (item) {
+            if (item.type === "MedicationDispense") { resource.push(item); }
+          });
+        });
+        if (!resource.length || !supportsInteraction(resource[0], "search-type")
+            || !hasGrantedReadScope(client, "MedicationDispense")) {
+          return null;
+        }
+        return client.request("MedicationDispense?patient=" + encodeURIComponent(patientId) + "&_count=100")
+          .then(function (bundle) {
+            var entries = bundle && Array.isArray(bundle.entry) ? bundle.entry : [];
+            var hasNextPage = Array.isArray(bundle && bundle.link) && bundle.link.some(function (link) {
+              return link && link.relation === "next";
+            });
+            if (hasNextPage) { return null; }
+            return entries.map(function (entry) { return entry.resource; }).filter(function (item) {
+              return item && item.resourceType === "MedicationDispense" && item.status === "completed";
+            });
+          })
+          .catch(function () { return null; });
+      }).catch(function () { return null; });
+    }
+
+    function getRefillInfo(request) {
+      var repeats = request.dispenseRequest && request.dispenseRequest.numberOfRepeatsAllowed;
+      if (typeof repeats !== "number" || repeats < 0 || !Number.isFinite(repeats)) {
+        return { label: "Not recorded", remaining: null };
+      }
+      if (!Array.isArray(medicationDispenses)) {
+        return { label: "Not available", remaining: null };
+      }
+      var requestRef = "MedicationRequest/" + request.id;
+      var linkedDispenses = medicationDispenses.filter(function (dispense) {
+        var refs = Array.isArray(dispense.authorizingPrescription) ? dispense.authorizingPrescription : [];
+        return refs.some(function (ref) {
+          return ref && (ref.reference === requestRef || ref.reference === request.id);
+        });
+      });
+      var usedRefills = Math.max(0, linkedDispenses.length - 1);
+      var remaining = Math.max(0, repeats - usedRefills);
+      return { label: String(remaining), remaining: remaining };
+    }
+
+    function submitRefillRequest(request, medicationLabel, refillInfo, button, box) {
+      var status = box.querySelector(".refill-request-status");
+      if (!activeClient || !activePatient) {
+        status.textContent = "Please sign in again before requesting a refill.";
+        return;
+      }
+      button.disabled = true;
+      status.textContent = "Submitting refill request…";
+      var requestReference = request.id ? "MedicationRequest/" + request.id : "";
+      var message = "Patient refill request for " + medicationLabel + ". "
+        + "MedicationRequest reference: " + (requestReference || "not available") + ". "
+        + "Refills remaining shown in this app: " + refillInfo.label + ". "
+        + "Please review and contact the patient if a prescription is appropriate.";
+      ensureCreatePermission("Communication")
+        .then(function () {
+          return activeClient.create({
+            resourceType: "Communication",
+            status: "completed",
+            category: [{ text: "Medication refill request" }],
+            subject: { reference: "Patient/" + activePatient.id },
+            sender: { reference: "Patient/" + activePatient.id, display: formatName(activePatient) },
+            sent: new Date().toISOString(),
+            payload: [{ contentString: message }]
+          });
+        })
+        .then(function () {
+          status.textContent = "Refill request saved to the connected FHIR record. It is not a prescription; care-team review and delivery depend on the health system workflow.";
+          button.textContent = "Request submitted";
+        })
+        .catch(function (error) {
+          status.textContent = "Could not submit refill request. " + readableError(error);
+          button.disabled = false;
+        });
     }
 
     function medicationName(request, resolved) {
