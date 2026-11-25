@@ -54,6 +54,17 @@
     .medication-dosage { margin: 0; overflow-wrap: anywhere; }
     .medication-note { margin-bottom: 0; font-size: 0.9rem; }
 
+    .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: 0.9rem; }
+    .field { display: grid; gap: 0.3rem; margin: 0 0 0.85rem; }
+    .field label { font-weight: 650; }
+    input, select, textarea, button { font: inherit; }
+    input, select, textarea { width: 100%; max-width: 100%; padding: 0.65rem 0.75rem; border: 1px solid #b8c8d8; border-radius: 0.4rem; background: #fff; color: #172b3a; }
+    textarea { min-height: 6rem; resize: vertical; }
+    button { padding: 0.7rem 1rem; border: 0; border-radius: 0.4rem; background: #fff; color: #003b70; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: 0.65; cursor: wait; }
+    .form-help { font-size: 0.9rem; }
+    .form-status { margin: 0.75rem 0 0; overflow-wrap: anywhere; }
+    .status-success { border-left: 4px solid #75d69a; padding-left: 0.75rem; }
     a { color: #ffffff; text-underline-offset: 0.15em; }
     a:focus-visible { outline: 3px solid #ffffff; outline-offset: 3px; }
     [hidden] { display: none !important; }
@@ -116,6 +127,69 @@
         <ul id="medication-list" class="medication-list" hidden></ul>
         <p class="muted medication-note">Read-only view of medication requests in your patient record.</p>
       </section>
+      <section aria-labelledby="patient-medication-heading">
+        <h2 id="patient-medication-heading">Add a medication you take</h2>
+        <p>Record an over-the-counter medicine or a prescription obtained outside this health system. These are patient-reported entries, not prescriptions or clinician-verified orders.</p>
+        <form id="patient-medication-form">
+          <div class="form-grid">
+            <div class="field">
+              <label for="reported-medication-name">Medication name</label>
+              <input id="reported-medication-name" name="medicationName" maxlength="200" autocomplete="off" required>
+            </div>
+            <div class="field">
+              <label for="reported-medication-kind">Medication source</label>
+              <select id="reported-medication-kind" name="source" required>
+                <option value="over-the-counter">Over-the-counter</option>
+                <option value="out-of-network-prescription">Prescription from another clinic or pharmacy</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="reported-medication-strength">Strength (optional)</label>
+              <input id="reported-medication-strength" name="strength" maxlength="100" placeholder="e.g. 200 mg">
+            </div>
+            <div class="field">
+              <label for="reported-medication-status">Current status</label>
+              <select id="reported-medication-status" name="status">
+                <option value="active">Taking now</option>
+                <option value="stopped">Stopped</option>
+                <option value="completed">Course completed</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="reported-medication-dose">Dose and instructions (optional)</label>
+              <input id="reported-medication-dose" name="dose" maxlength="250" placeholder="e.g. 1 tablet twice daily">
+            </div>
+            <div class="field">
+              <label for="reported-medication-start">Start date (optional)</label>
+              <input id="reported-medication-start" name="startDate" type="date">
+            </div>
+          </div>
+          <div class="field">
+            <label for="reported-medication-notes">Additional details (optional)</label>
+            <textarea id="reported-medication-notes" name="notes" maxlength="2000" placeholder="Reason for taking it, prescribing clinic, pharmacy, or other details"></textarea>
+          </div>
+          <button id="save-patient-medication" type="submit">Add to my reported medications</button>
+          <p id="patient-medication-status" class="form-status" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+
+      <section aria-labelledby="care-message-heading">
+        <h2 id="care-message-heading">Message about a medication concern</h2>
+        <p>Describe a symptom, possible side effect, or medication question. You may attach one photo (JPEG, PNG, or WebP; up to 5 MB). Avoid including unrelated or identifying information in photos.</p>
+        <form id="medication-message-form">
+          <div class="field">
+            <label for="medication-message">Message to include in your health record</label>
+            <textarea id="medication-message" name="message" maxlength="4000" required placeholder="Which medication is involved? What happened, when did it start, and how are you feeling?"></textarea>
+          </div>
+          <div class="field">
+            <label for="medication-photo">Photo attachment (optional)</label>
+            <input id="medication-photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp">
+          </div>
+          <button id="send-medication-message" type="submit">Submit message</button>
+          <p id="medication-message-status" class="form-status" role="status" aria-live="polite"></p>
+        </form>
+        <p class="form-help">This submits a FHIR Communication (and, if attached, a DocumentReference) to the connected record. Delivery to a clinician or a monitored inbox depends on the health system's FHIR workflow. This is not an emergency service; seek urgent medical care for severe or rapidly worsening symptoms.</p>
+      </section>
       <p><a href="./" id="sign-out">Sign out</a></p>
     </div>
 
@@ -130,11 +204,14 @@
     // patient's identity before the separate Observation request starts.
     FHIR.oauth2.ready()
       .then(function (client) {
+        activeClient = client;
         return client.patient.read().then(function (patient) {
+          activePatient = patient;
           showPatient(patient);
           return Promise.all([
             loadObservations(client, patient),
-            loadMedications(client, patient)
+            loadMedications(client, patient),
+            loadWriteCapabilities(client)
           ]);
         });
       })
@@ -148,6 +225,19 @@
       event.preventDefault();
       sessionStorage.clear();
       location.href = "./";
+    });
+
+    var activeClient = null;
+    var activePatient = null;
+    var writeCapabilityPromise = null;
+
+    document.getElementById("patient-medication-form").addEventListener("submit", function (event) {
+      event.preventDefault();
+      submitPatientMedication();
+    });
+    document.getElementById("medication-message-form").addEventListener("submit", function (event) {
+      event.preventDefault();
+      submitMedicationMessage();
     });
 
     // Medication review is intentionally read-only. Check the server's
@@ -370,6 +460,209 @@
       var node = document.getElementById("medications-unavailable");
       node.hidden = false;
       node.textContent = message;
+    }
+
+    function loadWriteCapabilities(client) {
+      writeCapabilityPromise = client.request("metadata").then(function (capability) {
+        var resources = [];
+        (capability.rest || []).forEach(function (rest) {
+          (rest.resource || []).forEach(function (resource) { resources.push(resource); });
+        });
+        return {
+          MedicationStatement: canCreateResource(resources, "MedicationStatement"),
+          Communication: canCreateResource(resources, "Communication"),
+          DocumentReference: canCreateResource(resources, "DocumentReference")
+        };
+      }).catch(function () {
+        return { MedicationStatement: false, Communication: false, DocumentReference: false };
+      });
+      return writeCapabilityPromise;
+    }
+
+    function canCreateResource(resources, type) {
+      var resource = resources.filter(function (item) { return item.type === type; })[0];
+      return !!resource && supportsInteraction(resource, "create");
+    }
+
+    function hasGrantedWriteScope(client, resourceType) {
+      var state = client.state || {};
+      var tokenResponse = state.tokenResponse || {};
+      var scope = tokenResponse.scope || state.scope || "";
+      if (!scope) { return true; }
+      var scopes = scope.split(/\\s+/);
+      return scopes.some(function (item) {
+        return item === "patient/" + resourceType + ".write"
+          || item === "user/" + resourceType + ".write"
+          || item === "patient/" + resourceType + ".*"
+          || item === "user/" + resourceType + ".*"
+          || item === "patient/*.write"
+          || item === "user/*.write";
+      });
+    }
+
+    function ensureCreatePermission(type) {
+      return (writeCapabilityPromise || loadWriteCapabilities(activeClient)).then(function (capabilities) {
+        if (!capabilities[type]) {
+          throw new Error("The connected FHIR server does not advertise create support for " + type + ".");
+        }
+        if (!hasGrantedWriteScope(activeClient, type)) {
+          throw new Error("The app was not granted patient/" + type + ".write access. Sign out and sign in again to approve the requested permission.");
+        }
+      });
+    }
+
+    function submitPatientMedication() {
+      var form = document.getElementById("patient-medication-form");
+      var button = document.getElementById("save-patient-medication");
+      var status = document.getElementById("patient-medication-status");
+      if (!form.reportValidity()) { return; }
+      if (!activeClient || !activePatient) {
+        status.textContent = "Please sign in again before adding a medication.";
+        return;
+      }
+      button.disabled = true;
+      status.className = "form-status";
+      status.textContent = "Saving your patient-reported medication…";
+
+      var name = document.getElementById("reported-medication-name").value.trim();
+      var source = document.getElementById("reported-medication-kind").value;
+      var strength = document.getElementById("reported-medication-strength").value.trim();
+      var dose = document.getElementById("reported-medication-dose").value.trim();
+      var notes = document.getElementById("reported-medication-notes").value.trim();
+      var startDate = document.getElementById("reported-medication-start").value;
+      var medicationStatus = document.getElementById("reported-medication-status").value;
+      var noteText = source === "over-the-counter"
+        ? "Patient reported: over-the-counter medication."
+        : "Patient reported: prescription obtained outside this health system.";
+      if (notes) { noteText += " " + notes; }
+
+      var resource = {
+        resourceType: "MedicationStatement",
+        status: medicationStatus,
+        medicationCodeableConcept: {
+          text: name + (strength ? " (" + strength + ")" : "")
+        },
+        subject: { reference: "Patient/" + activePatient.id },
+        informationSource: { reference: "Patient/" + activePatient.id, display: formatName(activePatient) },
+        category: {
+          coding: [{ system: "http://terminology.hl7.org/CodeSystem/medication-statement-category", code: "community", display: "Community" }],
+          text: "Patient-reported medication"
+        },
+        note: [{ text: noteText }]
+      };
+      if (startDate) { resource.effectiveDateTime = startDate; }
+      if (dose) {
+        resource.dosage = [{ text: dose }];
+      }
+
+      ensureCreatePermission("MedicationStatement")
+        .then(function () { return activeClient.create(resource); })
+        .then(function () {
+          status.className = "form-status status-success";
+          status.textContent = "Your medication report was added to the connected patient record. It is labelled as patient-reported, not as a clinician-issued prescription.";
+          form.reset();
+        })
+        .catch(function (error) {
+          status.textContent = "We could not save this medication report. " + readableError(error);
+        })
+        .then(function () { button.disabled = false; });
+    }
+
+    function submitMedicationMessage() {
+      var form = document.getElementById("medication-message-form");
+      var button = document.getElementById("send-medication-message");
+      var status = document.getElementById("medication-message-status");
+      if (!form.reportValidity()) { return; }
+      if (!activeClient || !activePatient) {
+        status.textContent = "Please sign in again before submitting a message.";
+        return;
+      }
+      var message = document.getElementById("medication-message").value.trim();
+      var photoInput = document.getElementById("medication-photo");
+      var photo = photoInput.files && photoInput.files[0];
+      if (!message) { status.textContent = "Enter a message before submitting."; return; }
+      if (photo && ["image/jpeg", "image/png", "image/webp"].indexOf(photo.type) === -1) {
+        status.textContent = "Choose a JPEG, PNG, or WebP image.";
+        return;
+      }
+      if (photo && photo.size > 5 * 1024 * 1024) {
+        status.textContent = "The photo must be 5 MB or smaller.";
+        return;
+      }
+
+      button.disabled = true;
+      status.className = "form-status";
+      status.textContent = "Submitting your message…";
+
+      ensureCreatePermission("Communication")
+        .then(function () {
+          if (!photo) { return null; }
+          return ensureCreatePermission("DocumentReference").then(function () {
+            return readPhotoAsBase64(photo).then(function (base64) {
+              var documentResource = {
+                resourceType: "DocumentReference",
+                status: "current",
+                docStatus: "final",
+                type: { text: "Patient-submitted medication-related photo" },
+                subject: { reference: "Patient/" + activePatient.id },
+                date: new Date().toISOString(),
+                author: [{ reference: "Patient/" + activePatient.id }],
+                description: "Photo attached by the patient to a medication-related message",
+                content: [{
+                  attachment: {
+                    contentType: photo.type,
+                    title: photo.name,
+                    creation: new Date(photo.lastModified || Date.now()).toISOString(),
+                    data: base64
+                  }
+                }]
+              };
+              return activeClient.create(documentResource).then(function (created) {
+                if (!created || !created.id) {
+                  throw new Error("The server saved the photo but did not return its DocumentReference id, so the message could not link to it.");
+                }
+                return "DocumentReference/" + created.id;
+              });
+            });
+          });
+        })
+        .then(function (documentReference) {
+          var communication = {
+            resourceType: "Communication",
+            status: "completed",
+            subject: { reference: "Patient/" + activePatient.id },
+            sender: { reference: "Patient/" + activePatient.id, display: formatName(activePatient) },
+            sent: new Date().toISOString(),
+            payload: [{ contentString: message }]
+          };
+          if (documentReference) {
+            communication.payload.push({ contentReference: { reference: documentReference } });
+          }
+          return activeClient.create(communication);
+        })
+        .then(function () {
+          status.className = "form-status status-success";
+          status.textContent = "Your message was saved to the connected FHIR record. Whether a care team receives an alert or sees it in an inbox depends on that health system's workflow.";
+          form.reset();
+        })
+        .catch(function (error) {
+          status.textContent = "We could not submit your message. " + readableError(error);
+        })
+        .then(function () { button.disabled = false; });
+    }
+
+    function readPhotoAsBase64(file) {
+      return new Promise(function (resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function () {
+          var result = String(reader.result || "");
+          var comma = result.indexOf(",");
+          if (comma < 0) { reject(new Error("The selected photo could not be read.")); return; }
+          resolve(result.slice(comma + 1));
+        };
+        reader.onerror = function () { reject(new Error("The selected photo could not be read.")); };
+        reader.readAsDataURL(file);
+      });
     }
 
     // This function reads optional Patient.name, gender and birthDate fields.
